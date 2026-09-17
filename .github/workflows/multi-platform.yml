@@ -73,6 +73,8 @@ jobs:
         with:
           combine: true
           target: ${{ matrix.config.target }}
+          use-lto: true
+          android-min-sdk: '35'
           # sdk: nightly
 
   package:

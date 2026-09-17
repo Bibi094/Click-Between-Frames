@@ -39,6 +39,7 @@ TimestampType currentFrameTime;
 bool firstFrame = true; // necessary to prevent accidental inputs at the start of the level or when unpausing
 bool skipUpdate = true; // true -> dont split steps during PlayerObject::update()
 bool linuxNative = false;
+bool androidNative = false;
 
 std::array<std::unordered_set<size_t>, 6> inputBinds;
 std::unordered_set<uint16_t> heldInputs;
@@ -55,6 +56,10 @@ void buildStepQueue(int stepCount) {
 
 	#ifdef GEODE_IS_WINDOWS
 	if (linuxNative) linuxCheckInputs();
+	#endif
+
+	#ifdef GEODE_IS_ANDROID
+	if (androidNative) androidCheckInputs();
 	#endif
 	
 	// workaround for a bug in geode 5.3.0 that affects android
@@ -75,7 +80,7 @@ void buildStepQueue(int stepCount) {
 		return;
 	}
 
-	if (!linuxNative) inputVector.insert(inputVector.end(), playLayer->m_queuedButtons.begin(), playLayer->m_queuedButtons.end());
+	if (!linuxNative && !androidNative) inputVector.insert(inputVector.end(), playLayer->m_queuedButtons.begin(), playLayer->m_queuedButtons.end());
 	playLayer->m_queuedButtons.clear();
 
 	TimestampType deltaTime = currentFrameTime - lastFrameTime;
@@ -86,7 +91,12 @@ void buildStepQueue(int stepCount) {
 		double elapsedTime = 0.0;
 		while (inputIdx < inputVector.size()) { // while loop to account for multiple inputs on the same step
 			PlayerButtonCommand input = inputVector[inputIdx];
-			GEODE_ANDROID(input.m_timestamp /= androidFactor;)
+			// Only apply the geode 5.3.0 timestamp-units workaround to
+			// inputs from the normal touch dispatch path (m_queuedButtons);
+			// androidCheckInputs() already produces timestamps in the same
+			// units as getCurrentTimestamp() itself, so applying this here
+			// too would corrupt them.
+			GEODE_ANDROID(if (!androidNative) input.m_timestamp /= androidFactor;)
 
 			if (input.m_timestamp - lastFrameTime < stepDelta * (i + 1)) { // if the next input in the vector happened on the current step, or if its the last step
 				double inputTime = fmod((input.m_timestamp - lastFrameTime), stepDelta) / stepDelta; // proportion of step elapsed at the time the input was made
@@ -126,9 +136,9 @@ Step popStepQueue() {
 	return front;
 }
 
-#ifdef GEODE_IS_WINDOWS
+#if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_ANDROID)
 /*
-prepare list of keybinds for linux
+prepare list of keybinds for linux/android native input
 */
 void updateKeybinds() {
 	std::array<std::unordered_set<size_t>, 6> binds;
@@ -227,8 +237,8 @@ bool safeMode;
 
 class $modify(PlayLayer) {
 	bool init(GJGameLevel* level, bool useReplay, bool dontCreateObjects) {
-		#ifdef GEODE_IS_WINDOWS
-		if (linuxNative) updateKeybinds(); // update keybinds when you enter a level (for linux)
+		#if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_ANDROID)
+		if (linuxNative || androidNative) updateKeybinds(); // update keybinds when you enter a level (for linux/android native input)
 		#endif
 		bool result = PlayLayer::init(level, useReplay, dontCreateObjects);
 		if (!softToggle) {
@@ -289,6 +299,10 @@ void onFrameStart() {
 			else index++;
 		}
 	}
+	#endif
+
+	#ifdef GEODE_IS_ANDROID
+	if (androidNative) androidHeartbeat();
 	#endif
 }
 
@@ -745,5 +759,9 @@ $on_mod(Loaded) {
 	);
 
 	windowsSetup();
+#endif
+
+#ifdef GEODE_IS_ANDROID
+	androidSetup();
 #endif
 }

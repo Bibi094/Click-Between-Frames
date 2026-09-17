@@ -18,6 +18,10 @@ if (WIN32)
     target_sources(${PROJECT_NAME} PRIVATE src/windows.cpp)
 endif()
 
+if (ANDROID)
+    target_sources(${PROJECT_NAME} PRIVATE src/android.cpp)
+endif()
+
 if (NOT DEFINED ENV{GEODE_SDK})
     message(FATAL_ERROR "Unable to find Geode SDK! Please define GEODE_SDK environment variable to point to Geode")
 else()

@@ -21,6 +21,7 @@ inline TimestampType getCurrentTimestamp() {
 
 #elif defined(GEODE_IS_ANDROID)
 
+#include "android.hpp"
 #include <time.h>
 
 inline TimestampType getCurrentTimestamp() {
