@@ -33,3 +33,8 @@ extern bool androidNative;
 void androidSetup();
 void androidCheckInputs();
 void androidHeartbeat();
+
+// Defined in main.cpp (it's not actually Android-specific logic, just only
+// called from here so far): true if a normalized (0..65535 per axis) touch
+// position lands on the pause button or a checkpoint place/remove button.
+bool isTouchOnUi(int touchX, int touchY);

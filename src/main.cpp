@@ -54,14 +54,6 @@ void buildStepQueue(int stepCount) {
 	nextInput = EMPTY_INPUT;
 	stepQueue = {}; // shouldnt be necessary, but just in case
 
-	#ifdef GEODE_IS_WINDOWS
-	if (linuxNative) linuxCheckInputs();
-	#endif
-
-	#ifdef GEODE_IS_ANDROID
-	if (androidNative) androidCheckInputs();
-	#endif
-	
 	// workaround for a bug in geode 5.3.0 that affects android
 	#ifdef GEODE_IS_ANDROID
 	static double androidFactor = []() {
@@ -76,7 +68,11 @@ void buildStepQueue(int stepCount) {
 		skipUpdate = true;
 		firstFrame = false;
 		lastFrameTime = currentFrameTime;
-		inputVector.clear();
+		// Not clearing `inputVector` here: `onFrameStart` is now
+		// responsible for that in every case (including a synthesized
+		// still-held-on-respawn press for linuxNative/androidNative -- see
+		// there), and clearing it again here would discard that press
+		// before this function's own per-step loop ever sees it.
 		return;
 	}
 
@@ -267,6 +263,54 @@ class $modify(PlayLayer) {
 bool mouseFix;
 bool precisionFix;
 
+// True if a normalized (0..65535 per axis) touch position -- as
+// classify_and_convert on the Rust side reports it for ABS_X/ABS_Y, see
+// devices.rs -- lands on the pause button or a checkpoint place/remove
+// button, so androidCheckInputs() can drop a tap instead of also
+// registering it as a gameplay jump. This raw capture has no knowledge of
+// the game's UI layout otherwise, so without this, any tap on those
+// buttons would also fire a phantom jump.
+//
+// ASSUMPTION: this assumes the touch digitizer's raw axes map directly
+// onto the screen with no rotation (ABS_X -> screen X left-to-right,
+// ABS_Y -> screen Y top-to-bottom). Real touchscreen hardware sometimes
+// reports coordinates in the panel's native orientation regardless of how
+// the app is currently displayed (e.g. a panel that's natively portrait
+// being used by a landscape-locked app), in which case this would need to
+// swap and/or flip axes to match instead. There's no way to verify this
+// without testing on real hardware -- if suppression doesn't line up with
+// where the buttons actually are on a given device, this is the first
+// thing to check.
+bool isTouchOnUi(int touchX, int touchY) {
+	if (touchX < 0 || touchY < 0) return false; // position not known yet
+
+	UILayer* ui = UILayer::get();
+	if (!ui) return false;
+
+	CCSize winSize = CCDirector::sharedDirector()->getWinSize();
+	float fracX = touchX / 65535.0f;
+	float fracY = touchY / 65535.0f;
+	// Touch Y grows downward; cocos2d's Y grows upward.
+	CCPoint worldPoint(fracX * winSize.width, (1.0f - fracY) * winSize.height);
+
+	auto hits = [&](CCNode* node) {
+		if (!node || !node->isVisible()) return false;
+		CCNode* parent = node->getParent();
+		CCPoint localPoint = parent ? parent->convertToNodeSpace(worldPoint) : worldPoint;
+		return node->boundingBox().containsPoint(localPoint);
+	};
+
+	if (hits(ui->m_pauseBtn)) return true;
+
+	if (ui->m_checkpointMenu && ui->m_checkpointMenu->isVisible()) {
+		for (CCNode* child : ui->m_checkpointMenu->getChildrenExt()) {
+			if (hits(child)) return true;
+		}
+	}
+
+	return false;
+}
+
 void onFrameStart() {
 	PlayLayer* playLayer = PlayLayer::get();
 	CCNode* par;
@@ -304,6 +348,31 @@ void onFrameStart() {
 	#ifdef GEODE_IS_ANDROID
 	if (androidNative) androidHeartbeat();
 	#endif
+
+	// Drain native input every frame -- including while the player is
+	// dead -- so the shared-memory ring buffer never backs up.
+	// linuxCheckInputs()/androidCheckInputs() push resolved
+	// PlayerButtonCommands straight into `inputVector`; buildStepQueue()
+	// itself doesn't run at all while dead (see calculateSteps()), so
+	// without this, input made during death would just sit undrained
+	// until respawn and then get misfired (see below for why that's a
+	// problem even beyond it being late).
+	#ifdef GEODE_IS_WINDOWS
+	if (linuxNative) linuxCheckInputs();
+	#endif
+	#ifdef GEODE_IS_ANDROID
+	if (androidNative) androidCheckInputs();
+	#endif
+
+	if ((linuxNative || androidNative) && playLayer && playLayer->m_playerDied) {
+		// The player is dead, so none of this should reach the step queue
+		// (buildStepQueue() doesn't even run while dead -- see
+		// calculateSteps() -- so without this, input made during death
+		// would just sit undrained in `inputVector` until respawn and then
+		// get misfired all at once, timestamped as if it had just
+		// happened).
+		inputVector.clear();
+	}
 }
 
 #ifdef GEODE_IS_WINDOWS
