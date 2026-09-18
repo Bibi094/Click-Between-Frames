@@ -41,6 +41,13 @@ bool skipUpdate = true; // true -> dont split steps during PlayerObject::update(
 bool linuxNative = false;
 bool androidNative = false;
 
+// Tracks which of the 6 GameActions are currently held, according to the
+// raw linuxNative/androidNative input stream, independent of whether
+// that's been delivered to the game yet. Only used to correctly handle
+// death -> respawn transitions; see `onFrameStart`.
+std::array<bool, 6> nativeButtonHeld{};
+bool wasPlayerDead = false;
+
 std::array<std::unordered_set<size_t>, 6> inputBinds;
 std::unordered_set<uint16_t> heldInputs;
 
@@ -54,14 +61,6 @@ void buildStepQueue(int stepCount) {
 	nextInput = EMPTY_INPUT;
 	stepQueue = {}; // shouldnt be necessary, but just in case
 
-	#ifdef GEODE_IS_WINDOWS
-	if (linuxNative) linuxCheckInputs();
-	#endif
-
-	#ifdef GEODE_IS_ANDROID
-	if (androidNative) androidCheckInputs();
-	#endif
-	
 	// workaround for a bug in geode 5.3.0 that affects android
 	#ifdef GEODE_IS_ANDROID
 	static double androidFactor = []() {
@@ -76,7 +75,11 @@ void buildStepQueue(int stepCount) {
 		skipUpdate = true;
 		firstFrame = false;
 		lastFrameTime = currentFrameTime;
-		inputVector.clear();
+		// Not clearing `inputVector` here: `onFrameStart` is now
+		// responsible for that in every case (including a synthesized
+		// still-held-on-respawn press for linuxNative/androidNative -- see
+		// there), and clearing it again here would discard that press
+		// before this function's own per-step loop ever sees it.
 		return;
 	}
 
@@ -240,6 +243,8 @@ class $modify(PlayLayer) {
 		#if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_ANDROID)
 		if (linuxNative || androidNative) updateKeybinds(); // update keybinds when you enter a level (for linux/android native input)
 		#endif
+		nativeButtonHeld = {};
+		wasPlayerDead = false;
 		bool result = PlayLayer::init(level, useReplay, dontCreateObjects);
 		if (!softToggle) {
 			this->m_clickBetweenSteps = false;
@@ -267,6 +272,13 @@ class $modify(PlayLayer) {
 bool mouseFix;
 bool precisionFix;
 
+// Maps a resolved PlayerButtonCommand's target back to the corresponding
+// GameAction index (0..5). Used only for `nativeButtonHeld` bookkeeping.
+int toGameAction(PlayerButton button, bool isPlayer2) {
+	int offset = button == PlayerButton::Jump ? 0 : button == PlayerButton::Left ? 1 : 2;
+	return (isPlayer2 ? p2Jump : p1Jump) + offset;
+}
+
 void onFrameStart() {
 	PlayLayer* playLayer = PlayLayer::get();
 	CCNode* par;
@@ -285,6 +297,8 @@ void onFrameStart() {
 		firstFrame = true;
 		skipUpdate = true;
 		inputVector.clear();
+		nativeButtonHeld = {};
+		wasPlayerDead = false;
 	}
 	
 	#ifdef GEODE_IS_WINDOWS
@@ -304,6 +318,59 @@ void onFrameStart() {
 	#ifdef GEODE_IS_ANDROID
 	if (androidNative) androidHeartbeat();
 	#endif
+
+	// Drain native input every frame -- including while the player is
+	// dead -- so the shared-memory ring buffer never backs up.
+	// linuxCheckInputs()/androidCheckInputs() push resolved
+	// PlayerButtonCommands straight into `inputVector`; buildStepQueue()
+	// itself doesn't run at all while dead (see calculateSteps()), so
+	// without this, input made during death would just sit undrained
+	// until respawn and then get misfired (see below for why that's a
+	// problem even beyond it being late).
+	#ifdef GEODE_IS_WINDOWS
+	if (linuxNative) linuxCheckInputs();
+	#endif
+	#ifdef GEODE_IS_ANDROID
+	if (androidNative) androidCheckInputs();
+	#endif
+
+	if ((linuxNative || androidNative) && playLayer) {
+		if (playLayer->m_playerDied) {
+			// The player is dead, so none of this should reach the step
+			// queue -- but a button that's *still* held at the moment of
+			// respawn should carry through (this is what makes buffering a
+			// jump into your respawn work), so track held state instead of
+			// just discarding everything here. buildStepQueue() never sees
+			// any of this directly: instead, a synthesized "still held"
+			// press gets fed to it right when death ends, if applicable
+			// (see the `wasPlayerDead` branch below).
+			for (auto& input : inputVector) {
+				nativeButtonHeld[toGameAction(input.m_button, input.m_isPlayer2)] = input.m_isPush;
+			}
+			inputVector.clear();
+			wasPlayerDead = true;
+		}
+		else if (wasPlayerDead) {
+			// Just respawned: synthesize a press, timestamped now, for
+			// anything still held according to the raw input stream. An
+			// isolated press+release that happened entirely while dead
+			// leaves the corresponding slot `false` here, so nothing gets
+			// synthesized for it -- fixing a phantom input briefly
+			// registering right after respawn for a button that was
+			// already released before respawning, while still letting an
+			// actually-held button correctly jump on respawn.
+			for (int action = 0; action < 6; action++) {
+				if (!nativeButtonHeld[action]) continue;
+				inputVector.push_back(PlayerButtonCommand{
+					.m_button = action % 3 == 0 ? PlayerButton::Jump : action % 3 == 1 ? PlayerButton::Left : PlayerButton::Right,
+					.m_isPush = true,
+					.m_isPlayer2 = action >= 3,
+					.m_timestamp = currentFrameTime,
+				});
+			}
+			wasPlayerDead = false;
+		}
+	}
 }
 
 #ifdef GEODE_IS_WINDOWS
