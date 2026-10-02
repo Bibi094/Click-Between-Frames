@@ -107,8 +107,10 @@ void add_input_device(std::string path, int epoll_fd, std::vector<struct libevde
         return;
     }
 
+    // touchscreens skip the bus filter, they are usually on I2C/SPI/host buses (laptops, Android devices)
+    bool touchscreen = libevdev_has_property(dev, INPUT_PROP_DIRECT);
     int bus = libevdev_get_id_bustype(dev);
-    if (bus == BUS_USB || bus == BUS_BLUETOOTH || bus == BUS_I8042 || bus == BUS_VIRTUAL) {
+    if (touchscreen || bus == BUS_USB || bus == BUS_BLUETOOTH || bus == BUS_I8042 || bus == BUS_VIRTUAL) {
         epoll_event ev;
         ev.events = EPOLLIN;
         ev.data.ptr = dev;

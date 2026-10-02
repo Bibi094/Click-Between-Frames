@@ -1,6 +1,10 @@
 #include "Geode/loader/Log.hpp"
 #include "includes.hpp"
 
+#ifdef GEODE_IS_ANDROID
+#include "android.hpp"
+#endif
+
 #include <limits>
 #include <math.h>
 
@@ -55,6 +59,8 @@ void buildStepQueue(int stepCount) {
 
 	#ifdef GEODE_IS_WINDOWS
 	if (linuxNative) linuxCheckInputs();
+	#elif defined(GEODE_IS_ANDROID)
+	if (linuxNative) androidCheckInputs();
 	#endif
 	
 	// workaround for a bug in geode 5.3.0 that affects android
@@ -86,7 +92,9 @@ void buildStepQueue(int stepCount) {
 		double elapsedTime = 0.0;
 		while (inputIdx < inputVector.size()) { // while loop to account for multiple inputs on the same step
 			PlayerButtonCommand input = inputVector[inputIdx];
-			GEODE_ANDROID(input.m_timestamp /= androidFactor;)
+			#ifdef GEODE_IS_ANDROID
+			if (!linuxNative) input.m_timestamp /= androidFactor; // evdev timestamps are already in seconds
+			#endif
 
 			if (input.m_timestamp - lastFrameTime < stepDelta * (i + 1)) { // if the next input in the vector happened on the current step, or if its the last step
 				double inputTime = fmod((input.m_timestamp - lastFrameTime), stepDelta) / stepDelta; // proportion of step elapsed at the time the input was made
@@ -745,5 +753,7 @@ $on_mod(Loaded) {
 	);
 
 	windowsSetup();
+#elif defined(GEODE_IS_ANDROID)
+	androidSetup();
 #endif
 }
