@@ -246,6 +246,30 @@ class $modify(PlayLayer) {
 		return result;
 	}
 
+	/*
+	everything CBF queued up before a respawn belongs to the previous attempt:
+	- steps/inputs built on the frame the player died on (the reset can happen later on that same frame)
+	- inputs made while dead (evdev events keep arriving the whole time)
+	without this, a tap made just before respawning registers after it, and releasing while dead can leave the game stuck holding
+	*/
+	void resetLevel() {
+		PlayLayer::resetLevel();
+
+		stepQueue.clear();
+		nextInput = EMPTY_INPUT;
+		firstFrame = true;
+		skipUpdate = true;
+
+		if (linuxNative && !softToggle) {
+			#ifdef GEODE_IS_WINDOWS
+			linuxCheckInputs();
+			#elif defined(GEODE_IS_ANDROID)
+			androidCheckInputs();
+			#endif
+			inputVector.clear();
+		}
+	}
+
 	// disable progress in safe mode
 	void levelComplete() {
 		bool testMode = this->m_isTestMode;
